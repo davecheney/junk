@@ -59,7 +59,6 @@ func main() {
 	http.HandleFunc("/data/", data)
 	http.HandleFunc("/imports/", imports)
 	http.HandleFunc("/csv/", csv)
-	http.HandleFunc("/pkg/", pkg)
 
 	for i := range visuals {
 		visual := visuals[i]
@@ -150,29 +149,7 @@ func data(w http.ResponseWriter, r *http.Request) {
 
 func csv(w http.ResponseWriter, r *http.Request) {
 	pkg := r.URL.Path[len("/csv/"):]
-	pkgs := make(map[string][]string) // package -> imports
-	seen := make(map[string]bool)
-	var f func(string)
-	f = func(p string) {
-		switch p {
-		case "C", "unsafe":
-			// skip
-		default:
-			if seen[p] {
-				return
-			}
-			pkg, err := build.Import(p, "", 0)
-			if err != nil {
-				log.Fatal(err)
-			}
-			pkgs[p] = pkg.Imports
-			seen[p] = true
-			for _, pkg := range pkg.Imports {
-				f(pkg)
-			}
-		}
-	}
-	f(pkg)
+	root := Build(pkg)
 	fmt.Fprintln(w, "source,target,weight")
 	weight := func(p string) float64 {
 		if p == pkg {
@@ -180,48 +157,62 @@ func csv(w http.ResponseWriter, r *http.Request) {
 		}
 		return 1
 	}
-	for k, v := range pkgs {
-		for _, p := range v {
-			fmt.Fprintf(w, "%s,%s,%v\n", k, p, weight(k))
+	for k, v := range packages(root) {
+		for _, p := range v.Children {
+			fmt.Fprintf(w, "%s,%s,%v\n", k, p.Name, weight(k))
 		}
 	}
 }
 
-func pkg(w http.ResponseWriter, r *http.Request) {
-	pkg := r.URL.Path[len("/pkg/"):]
-	pkgs := make(map[string][]string) // package -> imports
-	seen := make(map[string]bool)
-	var f func(string, float64)
-	f = func(p string, size float64) {
+func packages(root *Package) map[string]*Package {
+	pkgs := make(map[string]*Package)
+	var f func(*Package)
+	f = func(p *Package) {
+		pkgs[p.Name] = p
+		for _, ch := range p.Children {
+			f(ch)
+		}
+	}
+	f(root)
+	return pkgs
+}
+
+type Package struct {
+	Name     string     `json:"name"`
+	Parent   *Package   `json:"parent,omitempty"`
+	Children []*Package `json:"children,omitempty"`
+}
+
+func Build(p string) *Package {
+	pkgs := make(map[string]*Package)
+	var f func(*Package, string) *Package
+	f = func(parent *Package, p string) *Package {
 		switch p {
 		case "C", "unsafe":
 			// skip
+			return nil
 		default:
-			if seen[p] {
-				return
+			if pkg, ok := pkgs[p]; ok {
+				return pkg
 			}
 			pkg, err := build.Import(p, "", 0)
 			if err != nil {
 				log.Fatal(err)
 			}
-			pkgs[p] = pkg.Imports
-			seen[p] = true
-			for _, pkg := range pkg.Imports {
-				f(pkg, 0)
+			var ch []*Package
+			pk := Package{
+				Name:   p,
+				Parent: parent,
 			}
+			for _, i := range pkg.Imports {
+				pkg := f(&pk, i)
+				if pkg != nil {
+					ch = append(ch, pkg)
+				}
+			}
+			pk.Children = ch
+			return &pk
 		}
 	}
-	f(pkg, 0)
-	fmt.Fprintln(w, "source,target,weight")
-	weight := func(p string) float64 {
-		if p == pkg {
-			return 2
-		}
-		return 1
-	}
-	for k, v := range pkgs {
-		for _, p := range v {
-			fmt.Fprintf(w, "%s,%s,%v\n", k, p, weight(k))
-		}
-	}
+	return f(nil, p)
 }
