@@ -60,22 +60,15 @@ func main() {
 	http.HandleFunc("/imports/", imports)
 	http.HandleFunc("/csv/", csv)
 	http.HandleFunc("/pkg/", pkg)
-	http.HandleFunc("/tree/", func(w http.ResponseWriter, r *http.Request) {
-		pkg := r.URL.Path[len("/tree/"):]
-		tree.Execute(w, map[string]string{"package": pkg})
-	})
-	http.HandleFunc("/radial/", func(w http.ResponseWriter, r *http.Request) {
-		pkg := r.URL.Path[len("/radial/"):]
-		radial.Execute(w, map[string]string{"package": pkg})
-	})
-	http.HandleFunc("/cluster/", func(w http.ResponseWriter, r *http.Request) {
-		pkg := r.URL.Path[len("/cluster/"):]
-		cluster.Execute(w, map[string]string{"package": pkg})
-	})
-	http.HandleFunc("/force/", func(w http.ResponseWriter, r *http.Request) {
-		pkg := r.URL.Path[len("/force/"):]
-		force.Execute(w, map[string]string{"package": pkg})
-	})
+
+	for i := range visuals {
+		visual := visuals[i]
+		http.HandleFunc("/"+visual.name+"/", func(w http.ResponseWriter, r *http.Request) {
+			pkg := r.URL.Path[len("/"+visual.name+"/"):]
+			visual.tmpl.Execute(w, map[string]string{"package": pkg})
+		})
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		pkg := r.URL.Path[1:] // strip leading /
 		index.Execute(w, map[string]string{"package": pkg})
@@ -180,7 +173,7 @@ func csv(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	f(pkg)
-	fmt.Fprintln(w,"source,target,weight")
+	fmt.Fprintln(w, "source,target,weight")
 	weight := func(p string) float64 {
 		if p == pkg {
 			return 2
@@ -189,46 +182,46 @@ func csv(w http.ResponseWriter, r *http.Request) {
 	}
 	for k, v := range pkgs {
 		for _, p := range v {
-			fmt.Fprintf(w,"%s,%s,%v\n", k, p, weight(k))
+			fmt.Fprintf(w, "%s,%s,%v\n", k, p, weight(k))
 		}
 	}
 }
 
 func pkg(w http.ResponseWriter, r *http.Request) {
-        pkg := r.URL.Path[len("/pkg/"):]
-        pkgs := make(map[string][]string) // package -> imports
-        seen := make(map[string]bool)
-        var f func(string)
-        f = func(p string) {
-                switch p {
-                case "C", "unsafe":
-                        // skip
-                default:
-                        if seen[p] {
-                                return
-                        }
-                        pkg, err := build.Import(p, "", 0)
-                        if err != nil {
-                                log.Fatal(err)
-                        }
-                        pkgs[p] = pkg.Imports
-                        seen[p] = true
-                        for _, pkg := range pkg.Imports {
-                                f(pkg)
-                        }
-                }
-        }
-        f(pkg)
-        fmt.Fprintln(w,"source,target,weight")
-        weight := func(p string) float64 {
-                if p == pkg {
-                        return 2
-                }
-                return 1
-        }
-        for k, v := range pkgs {
-                for _, p := range v {
-                        fmt.Fprintf(w,"%s,%s,%v\n", k, p, weight(k))
-                }
-        }
+	pkg := r.URL.Path[len("/pkg/"):]
+	pkgs := make(map[string][]string) // package -> imports
+	seen := make(map[string]bool)
+	var f func(string, float64)
+	f = func(p string, size float64) {
+		switch p {
+		case "C", "unsafe":
+			// skip
+		default:
+			if seen[p] {
+				return
+			}
+			pkg, err := build.Import(p, "", 0)
+			if err != nil {
+				log.Fatal(err)
+			}
+			pkgs[p] = pkg.Imports
+			seen[p] = true
+			for _, pkg := range pkg.Imports {
+				f(pkg, 0)
+			}
+		}
+	}
+	f(pkg, 0)
+	fmt.Fprintln(w, "source,target,weight")
+	weight := func(p string) float64 {
+		if p == pkg {
+			return 2
+		}
+		return 1
+	}
+	for k, v := range pkgs {
+		for _, p := range v {
+			fmt.Fprintf(w, "%s,%s,%v\n", k, p, weight(k))
+		}
+	}
 }
