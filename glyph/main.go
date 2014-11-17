@@ -57,6 +57,7 @@ func check(err error) {
 
 func main() {
 	http.HandleFunc("/data/", data)
+	http.HandleFunc("/links/", links)
 	http.HandleFunc("/imports/", imports)
 	http.HandleFunc("/csv/", csv)
 	http.HandleFunc("/csvimports/", csvimports)
@@ -141,6 +142,36 @@ func data(w http.ResponseWriter, r *http.Request) {
 	}{Nodes: nodes, Edges: edges})
 }
 
+func links(w http.ResponseWriter, r *http.Request) {
+	pkg := r.URL.Path[len("/links/"):]
+	root := walk(pkg)
+	pkgs := flatten(root)
+	type Node struct {
+		Name string `json:"name"`
+	}
+	targets := make(map[*Package]int) // maps from package to index in pkgs
+	var nodes []Node
+	for i, p := range pkgs {
+		nodes = append(nodes, Node{Name: p.Name})
+		targets[p] = i
+	}
+	type Link struct {
+		Source int `json:"source"`
+		Target int `json:"target"`
+	}
+	var links []Link
+	for _, source := range pkgs {
+		for _, target := range source.Children {
+			links = append(links, Link{Source: targets[source], Target: targets[target]})
+		}
+	}
+	enc := json.NewEncoder(w)
+	enc.Encode(struct {
+		Nodes []Node `json:"nodes"`
+		Links []Link `json:"links"`
+	}{Nodes: nodes, Links: links})
+}
+
 func csv(w http.ResponseWriter, r *http.Request) {
 	pkg := r.URL.Path[len("/csv/"):]
 	root := walk(pkg)
@@ -166,7 +197,7 @@ func csvimports(w http.ResponseWriter, r *http.Request) {
 
 	for _, source := range nodes {
 		for _, target := range source.Children {
-			fmt.Fprintf(w, "%s,%s,%v\n", source.Name, target.Name, weights[source])
+			fmt.Fprintf(w, "%s,%s,%v\n", source.Name, target.Name, weights[target])
 		}
 	}
 }
@@ -179,6 +210,7 @@ func flatten(root *Package) []*Package {
 		if seen[p] {
 			return
 		}
+		seen[p] = true
 		pkgs = append(pkgs, p)
 		for _, ch := range p.Children {
 			f(ch)
@@ -192,6 +224,10 @@ type Package struct {
 	Name     string
 	Parent   *Package
 	Children []*Package
+}
+
+func (p Package) String() string {
+	return p.Name
 }
 
 // walk resolves the package import graph from p to its roots.
