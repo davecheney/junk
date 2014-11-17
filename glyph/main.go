@@ -59,6 +59,7 @@ func main() {
 	http.HandleFunc("/data/", data)
 	http.HandleFunc("/imports/", imports)
 	http.HandleFunc("/csv/", csv)
+	http.HandleFunc("/csvimports/", csvimports)
 
 	for i := range visuals {
 		visual := visuals[i]
@@ -77,33 +78,26 @@ func main() {
 
 func imports(w http.ResponseWriter, r *http.Request) {
 	pkg := r.URL.Path[len("/imports/"):] // strip leading /data/
-
-	type Node struct {
-		Name     string  `json:"name"`
-		Children []*Node `json:"children,omitempty"`
-	}
-	var f func(string) *Node
-	f = func(p string) *Node {
-		switch p {
-		case "C", "unsafe":
-			return nil
-		default:
-			pkg, err := build.Import(p, "", 0)
-			if err != nil {
-				log.Fatal(err)
-			}
-			var ch []*Node
-			for _, pkg := range pkg.Imports {
-				if n := f(pkg); n != nil {
-					ch = append(ch, n)
-				}
-			}
-			return &Node{p, ch}
-		}
-	}
+	root := walk(pkg)
 
 	enc := json.NewEncoder(w)
-	enc.Encode(f(pkg))
+	enc.Encode(children(root))
+}
+
+func children(root *Package) interface{} {
+	type node struct {
+		Name     string `json:"name"`
+		Children []node `json:"children,omitempty"`
+	}
+	var f func(*Package) node
+	f = func(root *Package) node {
+		var ch []node
+		for _, c := range root.Children {
+			ch = append(ch, f(c))
+		}
+		return node{Name: root.Name, Children: ch}
+	}
+	return f(root)
 }
 
 func data(w http.ResponseWriter, r *http.Request) {
@@ -149,19 +143,49 @@ func data(w http.ResponseWriter, r *http.Request) {
 
 func csv(w http.ResponseWriter, r *http.Request) {
 	pkg := r.URL.Path[len("/csv/"):]
-	root := Build(pkg)
+	root := walk(pkg)
 	fmt.Fprintln(w, "source,target,weight")
-	weight := func(p string) float64 {
-		if p == pkg {
-			return 2
-		}
-		return 1
-	}
-	for k, v := range packages(root) {
-		for _, p := range v.Children {
-			fmt.Fprintf(w, "%s,%s,%v\n", k, p.Name, weight(k))
+	for _, source := range flatten(root) {
+		for _, target := range source.Children {
+			fmt.Fprintf(w, "%s,%s,%v\n", source.Name, target.Name, 1)
 		}
 	}
+}
+
+func csvimports(w http.ResponseWriter, r *http.Request) {
+	pkg := r.URL.Path[len("/csvimports/"):]
+	root := walk(pkg)
+	nodes := flatten(root)
+	weights := make(map[*Package]float64)
+	for _, source := range nodes {
+		for _, target := range source.Children {
+			weights[target] += 1
+		}
+	}
+	fmt.Fprintln(w, "has,prefers,count")
+
+	for _, source := range nodes {
+		for _, target := range source.Children {
+			fmt.Fprintf(w, "%s,%s,%v\n", source.Name, target.Name, weights[target])
+		}
+	}
+}
+
+func flatten(root *Package) []*Package {
+	seen := make(map[*Package]bool)
+	var pkgs []*Package
+	var f func(*Package)
+	f = func(p *Package) {
+		if seen[p] {
+			return
+		}
+		pkgs = append(pkgs, p)
+		for _, ch := range p.Children {
+			f(ch)
+		}
+	}
+	f(root)
+	return pkgs
 }
 
 func packages(root *Package) map[string]*Package {
@@ -178,41 +202,38 @@ func packages(root *Package) map[string]*Package {
 }
 
 type Package struct {
-	Name     string     `json:"name"`
-	Parent   *Package   `json:"parent,omitempty"`
-	Children []*Package `json:"children,omitempty"`
+	Name     string
+	Parent   *Package
+	Children []*Package
 }
 
-func Build(p string) *Package {
+// walk resolves the package import graph from p to its roots.
+func walk(p string) *Package {
 	pkgs := make(map[string]*Package)
 	var f func(*Package, string) *Package
 	f = func(parent *Package, p string) *Package {
+		if pk, found := pkgs[p]; found {
+			return pk
+		}
+		pk := Package{
+			Name:   p,
+			Parent: parent,
+		}
 		switch p {
-		case "C", "unsafe":
-			// skip
-			return nil
+		case "C", "unsafe", "runtime":
+			// don't resolve dependencies, these
+			// packages don't have any, or don't exist.
 		default:
-			if pkg, ok := pkgs[p]; ok {
-				return pkg
-			}
 			pkg, err := build.Import(p, "", 0)
 			if err != nil {
 				log.Fatal(err)
 			}
-			var ch []*Package
-			pk := Package{
-				Name:   p,
-				Parent: parent,
-			}
 			for _, i := range pkg.Imports {
-				pkg := f(&pk, i)
-				if pkg != nil {
-					ch = append(ch, pkg)
-				}
+				pk.Children = append(pk.Children, f(&pk, i))
 			}
-			pk.Children = ch
-			return &pk
 		}
+		pkgs[p] = &pk
+		return &pk
 	}
 	return f(nil, p)
 }
