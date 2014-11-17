@@ -166,7 +166,7 @@ func csvimports(w http.ResponseWriter, r *http.Request) {
 
 	for _, source := range nodes {
 		for _, target := range source.Children {
-			fmt.Fprintf(w, "%s,%s,%v\n", source.Name, target.Name, weights[target])
+			fmt.Fprintf(w, "%s,%s,%v\n", source.Name, target.Name, weights[source])
 		}
 	}
 }
@@ -180,19 +180,6 @@ func flatten(root *Package) []*Package {
 			return
 		}
 		pkgs = append(pkgs, p)
-		for _, ch := range p.Children {
-			f(ch)
-		}
-	}
-	f(root)
-	return pkgs
-}
-
-func packages(root *Package) map[string]*Package {
-	pkgs := make(map[string]*Package)
-	var f func(*Package)
-	f = func(p *Package) {
-		pkgs[p.Name] = p
 		for _, ch := range p.Children {
 			f(ch)
 		}
