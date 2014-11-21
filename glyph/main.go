@@ -1,3 +1,17 @@
+// Glyph (a stupid name, but it does start with g), graphs the dependencies
+// between Go packages.
+//
+// Usage
+//
+//     $GOPATH/bin/glyph
+//
+// The program has no options, and presents a web interface on port 8080 on all interfaces.
+// The various visalisations are registred as top level handlers. Here are some examples
+//
+//     http://localhost:8080/tree/io
+//     http://localhost:8080/radial/math/rand
+//     http://localhost:8080/forcegraph/fmt
+//     http://localhost:8080/chord/cmd/go
 package main
 
 import (
