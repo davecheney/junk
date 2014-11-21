@@ -12,6 +12,8 @@
 //     http://localhost:8080/radial/math/rand
 //     http://localhost:8080/forcegraph/fmt
 //     http://localhost:8080/chord/cmd/go
+//
+// Glyph works sort of like godoc.
 package main
 
 import (
