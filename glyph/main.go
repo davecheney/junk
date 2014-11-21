@@ -61,6 +61,8 @@ func main() {
 	http.HandleFunc("/imports/", imports)
 	http.HandleFunc("/csv/", csv)
 	http.HandleFunc("/csvimports/", csvimports)
+	http.HandleFunc("/cc/", cc)
+	http.HandleFunc("/pushdown/", pushdown)
 
 	for i := range visuals {
 		visual := visuals[i]
@@ -83,6 +85,28 @@ func imports(w http.ResponseWriter, r *http.Request) {
 
 	enc := json.NewEncoder(w)
 	enc.Encode(children(root))
+}
+
+func cc(w http.ResponseWriter, r *http.Request) {
+	pkg := r.URL.Path[len("/cc/"):] // strip leading /data/
+	root := walk(pkg)
+	type Node struct {
+		Name    string   `json:"name"`
+		Imports []string `json:"imports,omitempty"`
+	}
+	var nodes []Node
+	imports := func(p *Package) []string {
+		var s []string
+		for _, c := range p.Children {
+			s = append(s, c.Name)
+		}
+		return s
+	}
+	for _, p := range flatten(root) {
+		nodes = append(nodes, Node{Name: p.Name, Imports: imports(p)})
+	}
+	enc := json.NewEncoder(w)
+	enc.Encode(nodes)
 }
 
 func children(root *Package) interface{} {
@@ -145,21 +169,34 @@ func data(w http.ResponseWriter, r *http.Request) {
 func links(w http.ResponseWriter, r *http.Request) {
 	pkg := r.URL.Path[len("/links/"):]
 	root := walk(pkg)
-	pkgs := flatten(root)
 	type Node struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Group int    `json:"group"`
 	}
-	targets := make(map[*Package]int) // maps from package to index in pkgs
 	var nodes []Node
-	for i, p := range pkgs {
-		nodes = append(nodes, Node{Name: p.Name})
-		targets[p] = i
+	var f func(*Package, int)
+	seen := make(map[*Package]bool)
+	targets := make(map[*Package]int) // maps from package to index in pkgs
+	var t int
+	f = func(p *Package, group int) {
+		if !seen[p] {
+			nodes = append(nodes, Node{Name: p.Name, Group: group})
+			seen[p] = true
+			targets[p] = t
+			t++
+		}
+		group++
+		for _, c := range p.Children {
+			f(c, group)
+		}
 	}
+	f(root, 1)
 	type Link struct {
 		Source int `json:"source"`
 		Target int `json:"target"`
 	}
 	var links []Link
+	pkgs := flatten(root)
 	for _, source := range pkgs {
 		for _, target := range source.Children {
 			links = append(links, Link{Source: targets[source], Target: targets[target]})
@@ -259,4 +296,63 @@ func walk(p string) *Package {
 		return &pk
 	}
 	return f(nil, p)
+}
+
+func tree(p *Package) string {
+	if p == nil {
+		return ""
+	}
+	return tree(p.Parent) + "->" + p.String()
+}
+
+// explode makes a deep copy of p, expanding the child references
+func explode(p *Package) *Package {
+	var f func(*Package, *Package) *Package
+	f = func(parent, p *Package) *Package {
+		pkg := Package{
+			Name:   p.Name,
+			Parent: parent,
+		}
+		for _, c := range p.Children {
+			pkg.Children = append(pkg.Children, f(&pkg, c))
+		}
+		return &pkg
+	}
+	return f(nil, p)
+}
+
+func pushdown(w http.ResponseWriter, r *http.Request) {
+	copy := func(s []*Package) []*Package {
+		c := make([]*Package, len(s))
+		copy(c, s)
+		return c
+	}
+
+	pkg := r.URL.Path[len("/pushdown/"):]
+	root := explode(walk(pkg))
+	var trim func(*Package)
+	trim = func(p *Package) {
+		c := copy(p.Children)
+		for i := 0; i < len(c); i++ {
+			fmt.Println(tree(p), "trim", c[i])
+			trim(c[i])
+		}
+		if p.Parent == nil {
+			return
+		}
+		for parent := p.Parent.Parent; parent != nil; parent = parent.Parent {
+			fmt.Println(p, "parent", parent)
+			for i := 0; i < len(parent.Children); {
+				if parent.Children[i].Name == p.Name {
+					fmt.Println(tree(p), "found", p, "via", tree(parent))
+					parent.Children = append(parent.Children[:i], parent.Children[i+1:]...)
+				} else {
+					i++
+				}
+			}
+		}
+	}
+	trim(root)
+	enc := json.NewEncoder(w)
+	enc.Encode(children(root))
 }
